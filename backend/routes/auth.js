@@ -1,11 +1,11 @@
-import expess from 'express';
-import bycrypt from 'bcryptjs';
+import express from 'express';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import pool from '../db.js';
+import pool from '../config/db.js';
 import { protect } from '../middleware/auth.js';
 
 
-const router = expess.Router();
+const router = express.Router();
 
 const cookieOptions = {
     httpOnly: true,
@@ -21,10 +21,16 @@ const generateToken = (user) => {
 }
 // Register-
 router.post('/register', async (req, res) => {
-    const { username, email, password } = req.body;
+    const { name, email, password } = req.body;
     
-    if (!username || !email || !password) {
-        return res.status(400).json({ message: 'Please provide username, email and password' });
+    if (!name) {
+        return res.status(400).json({ message: 'Please provide name' });
+    }
+    if (!email) {
+        return res.status(400).json({ message: 'Please provide email' });
+    }
+    if (!password) {
+        return res.status(400).json({ message: 'Please provide password' });
     }
 
     const userExists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -33,27 +39,37 @@ router.post('/register', async (req, res) => {
         return res.status(400).json({ message: 'User already exists' });
     }
 
-    const hashedPassword = await bycrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUser = await pool.query(
-        'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING *',
-        [username, email, hashedPassword]
+        'INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING *',
+        [name, email, hashedPassword]
     );
 
     const token = generateToken(newUser.rows[0]);
 
     res.cookie('token', token, cookieOptions);
 
-    return res.status(201).json({ user: newUser.rows[0]});
+    const created = newUser.rows[0];
+    return res.status(201).json({ user: { id: created.id, name: created.name, email: created.email } });
 });
 
-// Login
+// Login (accepts either email or name with password)
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Please provide email and password' });
+    const { email, name, password } = req.body;
+
+    if (!password) {
+        return res.status(400).json({ message: 'Please provide password' });
     }
-    const user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+
+    if (!email && !name) {
+        return res.status(400).json({ message: 'Please provide email or name' });
+    }
+
+    const identifier = email || name;
+    const lookupField = email ? 'email' : 'name';
+
+    const user = await pool.query(`SELECT * FROM users WHERE ${lookupField} = $1`, [identifier]);
 
     if (user.rows.length === 0) {
         return res.status(400).json({ message: 'Invalid credentials' });
@@ -61,7 +77,7 @@ router.post('/login', async (req, res) => {
 
     const userData = user.rows[0];
 
-    const isMatch = await bycrypt.compare(password, user.rows[0].password);
+    const isMatch = await bcrypt.compare(password, userData.password);
 
     if (!isMatch) {
         return res.status(400).json({ message: 'Invalid credentials' });
@@ -71,7 +87,7 @@ router.post('/login', async (req, res) => {
 
     res.cookie('token', token, cookieOptions);
 
-    res.json({ user: {id: userData.id, username: userData.username, email: userData.email} });
+    res.json({ user: { id: userData.id, name: userData.name, email: userData.email } });
 });
 
 // Me
